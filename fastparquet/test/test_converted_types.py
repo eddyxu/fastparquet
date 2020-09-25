@@ -151,3 +151,7 @@ def test_big_decimal():
             dtype='|S32')
     assert np.isclose(convert(data, schema),
                       np.array([0., 777.2, 751.6, 345.1, 644.1])).all()
+
+
+def test_struct():
+    pass

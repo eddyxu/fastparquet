@@ -903,6 +903,7 @@ def test_simple_nested():
     pf = ParquetFile(fn)
     assert len(pf.dtypes) == 5
     out = pf.to_pandas()
+    print(out)
     assert len(out.columns) == 5
     assert '_adobe_corpnew' not in out.columns
     assert all('_adobe_corpnew' + '.' in c for c in out.columns)

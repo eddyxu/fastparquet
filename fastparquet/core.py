@@ -1,6 +1,8 @@
+from typing import Dict, Any
 import warnings
 import numpy as np
 import pandas as pd
+import pandas
 try:
     from thrift.protocol.TCompactProtocol import TCompactProtocolAccelerated as TCompactProtocol
 except ImportError:
@@ -85,6 +87,7 @@ def read_rep(io_obj, daph, helper, metadata):
                                           bit_width)[:daph.num_values]
             # if repetition_levels.max() == 0:
             #     repetition_levels = None
+    print("REPETATED: ", repetition_levels)
     return repetition_levels
 
 
@@ -138,6 +141,7 @@ def read_data_page(f, helper, header, metadata, skip_nulls=False,
             values = np.zeros(nval, dtype=np.int8)
     else:
         raise NotImplementedError('Encoding %s' % daph.encoding)
+    print("Read Data Page: ", definition_levels, values)
     return definition_levels, repetition_levels, values[:nval]
 
 
@@ -306,8 +310,22 @@ def read_row_group_file(fn, rg, columns, categories, schema_helper, cats,
                               scheme=scheme)
 
 
+def _reconstruct_rows(flatted: Dict[str, Any]):
+    processed = {}
+    print("TRY TO FLAT: ", flatted)
+    for key, value in flatted.items():
+        print("FLATTEND: ", key, value)
+        if isinstance(value, dict):
+            processed[key] = _reconstruct_rows(value)
+        else:
+            processed[key] = value
+
+    return [row.to_dict() for  _, row in pandas.DataFrame(processed).iterrows()]
+
+
+
 def read_row_group_arrays(file, rg, columns, categories, schema_helper, cats,
-                          selfmade=False, assign=None):
+                          selfmade=False, assign=None) -> pandas.DataFrame:
     """
     Read a row group and return as a dict of arrays
 
@@ -318,19 +336,34 @@ def read_row_group_arrays(file, rg, columns, categories, schema_helper, cats,
     out = assign
     maps = {}
 
+    flatted_out = {}
+    print(type(assign), assign)
+
     for column in rg.columns:
+        print(f"is list like: {_is_list_like(schema_helper, column)}, map like: {_is_map_like(schema_helper, column)}")
+        buf = None
         if (_is_list_like(schema_helper, column) or
                 _is_map_like(schema_helper, column)):
             name = ".".join(column.meta_data.path_in_schema[:-2])
         else:
             name = ".".join(column.meta_data.path_in_schema)
+            column_data = flatted_out
+            for level_name in column.meta_data.path_in_schema[:-1]:
+                if level_name not in column_data:
+                    column_data[level_name] = {}
+                column_data = column_data[level_name]
+            last_name = column.meta_data.path_in_schema[-1]
+            column_data[last_name] = np.empty(assign[name].shape, dtype=assign[name].dtype)
+            buf = column_data[last_name]
+
+
         if name not in columns:
             continue
 
+        print("Reading column: ", column)
         read_col(column, schema_helper, file, use_cat=name+'-catdef' in out,
-                 selfmade=selfmade, assign=out[name],
+                 selfmade=selfmade, assign=buf,
                  catdef=out.get(name+'-catdef', None))
-
         if _is_map_like(schema_helper, column):
             if name not in maps:
                 maps[name] = out[name].copy()
@@ -341,6 +374,10 @@ def read_row_group_arrays(file, rg, columns, categories, schema_helper, cats,
                     value, key = out[name], maps[name]
                 out[name][:] = [dict(zip(k, v)) if k is not None else None
                                 for k, v in zip(key, value)]
+    #print(f"OUTPUT {out}")
+    reconstructed = _reconstruct_rows(flatted_out)
+    return pandas.DataFrame(reconstructed)
+
 
 
 def read_row_group(file, rg, columns, categories, schema_helper, cats,
@@ -351,7 +388,7 @@ def read_row_group(file, rg, columns, categories, schema_helper, cats,
     """
     if assign is None:
         raise RuntimeError('Going with pre-allocation!')
-    read_row_group_arrays(file, rg, columns, categories, schema_helper,
+    df = read_row_group_arrays(file, rg, columns, categories, schema_helper,
                           cats, selfmade, assign=assign)
 
     for cat in cats:
